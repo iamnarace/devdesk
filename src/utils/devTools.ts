@@ -126,8 +126,29 @@ export function decodeUrlString(input: string): string {
 export function parseQueryParams(urlOrQuery: string): Array<{ key: string; value: string }> {
   const trimmed = urlOrQuery.trim();
   if (!trimmed) return [];
-  const queryStart = trimmed.indexOf('?');
-  const rawQuery = queryStart >= 0 ? trimmed.slice(queryStart + 1) : trimmed;
+
+  // Strip RFC 3986 fragment (#...) first so hash fragments never pollute query values
+  const hashIndex = trimmed.indexOf('#');
+  const withoutFragment = hashIndex >= 0 ? trimmed.slice(0, hashIndex).trim() : trimmed;
+  if (!withoutFragment) return [];
+
+  const queryStart = withoutFragment.indexOf('?');
+  let rawQuery: string;
+  if (queryStart >= 0) {
+    rawQuery = withoutFragment.slice(queryStart + 1);
+  } else if (
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(withoutFragment) ||
+    withoutFragment.startsWith('/') ||
+    (!withoutFragment.includes('=') && !withoutFragment.includes('&'))
+  ) {
+    // Full URL or path without a '?' query string
+    return [];
+  } else {
+    rawQuery = withoutFragment;
+  }
+
+  if (!rawQuery) return [];
+
   const params = new URLSearchParams(rawQuery);
   const entries: Array<{ key: string; value: string }> = [];
   params.forEach((value, key) => {
@@ -284,6 +305,9 @@ export function inspectTimestampInput(input: string, referenceNowMs = Date.now()
 /**
  * Line-by-line Longest Common Subsequence (LCS) Diff Engine
  */
+export const MAX_DIFF_LINES = 1500;
+export const MAX_DIFF_CHARS = 150_000;
+
 export interface DiffLine {
   type: 'equal' | 'add' | 'remove';
   oldLineNumber?: number;
@@ -296,89 +320,181 @@ export interface DiffSummary {
   added: number;
   removed: number;
   unchanged: number;
+  truncated?: boolean;
+  limitWarning?: string;
 }
 
 export function computeLineDiff(
   originalText: string,
   modifiedText: string,
-  options: { ignoreTrimWhitespace?: boolean } = {}
+  options: {
+    ignoreTrimWhitespace?: boolean;
+    maxLines?: number;
+    maxChars?: number;
+  } = {}
 ): DiffSummary {
-  const oldLines = originalText.split(/\r?\n/);
-  const newLines = modifiedText.split(/\r?\n/);
+  const maxLines = options.maxLines ?? MAX_DIFF_LINES;
+  const maxChars = options.maxChars ?? MAX_DIFF_CHARS;
+
+  let truncated = false;
+  let safeOriginal = originalText;
+  let safeModified = modifiedText;
+
+  if (safeOriginal.length > maxChars) {
+    safeOriginal = safeOriginal.slice(0, maxChars);
+    truncated = true;
+  }
+  if (safeModified.length > maxChars) {
+    safeModified = safeModified.slice(0, maxChars);
+    truncated = true;
+  }
+
+  const rawOldLines = safeOriginal.split(/\r?\n/);
+  const rawNewLines = safeModified.split(/\r?\n/);
+
+  if (rawOldLines.length > maxLines || rawNewLines.length > maxLines) {
+    truncated = true;
+  }
+
+  const oldLines = rawOldLines.slice(0, maxLines);
+  const newLines = rawNewLines.slice(0, maxLines);
 
   const normalize = (s: string) => (options.ignoreTrimWhitespace ? s.trim() : s);
 
   const m = oldLines.length;
   const n = newLines.length;
 
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  // Trim common prefix and suffix in O(M + N) to minimize LCS matrix work
+  let prefixLen = 0;
+  while (
+    prefixLen < m &&
+    prefixLen < n &&
+    normalize(oldLines[prefixLen]) === normalize(newLines[prefixLen])
+  ) {
+    prefixLen++;
+  }
 
-  for (let i = m - 1; i >= 0; i--) {
-    for (let j = n - 1; j >= 0; j--) {
-      if (normalize(oldLines[i]) === normalize(newLines[j])) {
-        dp[i][j] = 1 + dp[i + 1][j + 1];
+  let suffixLen = 0;
+  while (
+    suffixLen < m - prefixLen &&
+    suffixLen < n - prefixLen &&
+    normalize(oldLines[m - 1 - suffixLen]) === normalize(newLines[n - 1 - suffixLen])
+  ) {
+    suffixLen++;
+  }
+
+  const midM = m - prefixLen - suffixLen;
+  const midN = n - prefixLen - suffixLen;
+  const stride = midN + 1;
+  const dp = new Int32Array((midM + 1) * stride);
+
+  for (let i = midM - 1; i >= 0; i--) {
+    const rowOffset = i * stride;
+    const nextRowOffset = (i + 1) * stride;
+    const normOld = normalize(oldLines[prefixLen + i]);
+    for (let j = midN - 1; j >= 0; j--) {
+      if (normOld === normalize(newLines[prefixLen + j])) {
+        dp[rowOffset + j] = 1 + dp[nextRowOffset + j + 1];
       } else {
-        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+        const down = dp[nextRowOffset + j];
+        const right = dp[rowOffset + j + 1];
+        dp[rowOffset + j] = down >= right ? down : right;
       }
     }
   }
 
   const lines: DiffLine[] = [];
-  let i = 0;
-  let j = 0;
   let added = 0;
   let removed = 0;
   let unchanged = 0;
 
-  while (i < m && j < n) {
-    if (normalize(oldLines[i]) === normalize(newLines[j])) {
+  for (let p = 0; p < prefixLen; p++) {
+    lines.push({
+      type: 'equal',
+      oldLineNumber: p + 1,
+      newLineNumber: p + 1,
+      content: newLines[p],
+    });
+    unchanged++;
+  }
+
+  let i = 0;
+  let j = 0;
+
+  while (i < midM && j < midN) {
+    if (normalize(oldLines[prefixLen + i]) === normalize(newLines[prefixLen + j])) {
       lines.push({
         type: 'equal',
-        oldLineNumber: i + 1,
-        newLineNumber: j + 1,
-        content: newLines[j],
+        oldLineNumber: prefixLen + i + 1,
+        newLineNumber: prefixLen + j + 1,
+        content: newLines[prefixLen + j],
       });
       unchanged++;
       i++;
       j++;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+    } else if (dp[(i + 1) * stride + j] >= dp[i * stride + j + 1]) {
       lines.push({
         type: 'remove',
-        oldLineNumber: i + 1,
-        content: oldLines[i],
+        oldLineNumber: prefixLen + i + 1,
+        content: oldLines[prefixLen + i],
       });
       removed++;
       i++;
     } else {
       lines.push({
         type: 'add',
-        newLineNumber: j + 1,
-        content: newLines[j],
+        newLineNumber: prefixLen + j + 1,
+        content: newLines[prefixLen + j],
       });
       added++;
       j++;
     }
   }
 
-  while (i < m) {
+  while (i < midM) {
     lines.push({
       type: 'remove',
-      oldLineNumber: i + 1,
-      content: oldLines[i],
+      oldLineNumber: prefixLen + i + 1,
+      content: oldLines[prefixLen + i],
     });
     removed++;
     i++;
   }
 
-  while (j < n) {
+  while (j < midN) {
     lines.push({
       type: 'add',
-      newLineNumber: j + 1,
-      content: newLines[j],
+      newLineNumber: prefixLen + j + 1,
+      content: newLines[prefixLen + j],
     });
     added++;
     j++;
   }
 
-  return { lines, added, removed, unchanged };
+  for (let s = 0; s < suffixLen; s++) {
+    const oldIdx = m - suffixLen + s;
+    const newIdx = n - suffixLen + s;
+    lines.push({
+      type: 'equal',
+      oldLineNumber: oldIdx + 1,
+      newLineNumber: newIdx + 1,
+      content: newLines[newIdx],
+    });
+    unchanged++;
+  }
+
+  const limitWarning = truncated
+    ? `Input exceeds the safe synchronous diff limit (${maxLines.toLocaleString()} lines or ${Math.round(
+        maxChars / 1000
+      )} KB per pane). Showing comparison for the first ${maxLines.toLocaleString()} lines.`
+    : undefined;
+
+  return {
+    lines,
+    added,
+    removed,
+    unchanged,
+    truncated,
+    limitWarning,
+  };
 }

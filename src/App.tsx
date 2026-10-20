@@ -538,6 +538,16 @@ export function App() {
                 </div>
               </div>
 
+              {diffResult.limitWarning && (
+                <div
+                  role="alert"
+                  className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-700/70 text-amber-200 text-xs font-mono flex items-center gap-2.5"
+                >
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>{diffResult.limitWarning}</span>
+                </div>
+              )}
+
               <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
                 <div className="px-4 py-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-xs font-mono">
                   <span className="text-slate-400">UNIFIED DIFF OUTPUT</span>
