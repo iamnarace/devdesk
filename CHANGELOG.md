@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1] - 2026-10-20
+
+### Changed
+- **URL Fragment & Query Parsing:** Fixed `parseQueryParams` so `#fragment` anchors (including fragments containing `?`) are stripped before query parameter extraction.
+- **Bounded LCS Line Diff Engine:** Added `MAX_DIFF_LINES = 1500` and `MAX_DIFF_CHARS = 150_000` input bounds in `computeLineDiff` with a visible UI truncation warning banner to guard against $O(N \times M)$ memory/CPU spikes.
+- **Build & Test Tooling:** Upgraded Vite to v6 and Vitest to v4 with exact diff boundary and URL fragment regression tests.
+
 ## [1.0.0] - 2026-10-20
 
 ### Added
