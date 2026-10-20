@@ -48,13 +48,13 @@ Developers frequently need to format an API response, inspect a URL query string
 - **Framework:** React 18 + TypeScript 5
 - **Styling:** Tailwind CSS (Carbon Slate & Cyan terminal dark theme)
 - **Icons:** Lucide React
-- **Build & Test:** Vite 5, Vitest, React Testing Library, ESLint
+- **Build & Test:** Vite 6, Vitest 4, React Testing Library, ESLint
 
 ---
 
 ## Requirements & Installation
 
-- **Node.js:** v18.18+ or v20+
+- **Node.js:** v20+ LTS recommended (v18.18+ supported for build/runtime)
 - **npm:** v9+
 
 ```bash
@@ -132,7 +132,7 @@ devdesk/
 
 ## Known Limitations
 
-- **LCS Diff Complexity:** The dynamic programming line-diff engine is optimized for typical source files and configuration snippets (up to ~2,500 lines). Comparing multi-megabyte log files in browser memory may cause UI lag.
+- **LCS Diff Complexity Guard:** The dynamic programming line-diff engine enforces a synchronous input limit of 1,500 lines or 150 KB per pane (`MAX_DIFF_LINES = 1500`, `MAX_DIFF_CHARS = 150_000`), automatically truncating oversized inputs and surfacing a warning banner to prevent main-thread UI freezes.
 - **Standard JSON Only:** JSON Studio validates strict RFC 8259 JSON and does not parse JSON5 comments or trailing commas.
 
 ---

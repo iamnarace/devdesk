@@ -10,6 +10,8 @@ import {
   generateUuidBatch,
   inspectTimestampInput,
   computeLineDiff,
+  MAX_DIFF_LINES,
+  MAX_DIFF_CHARS,
 } from '../utils/devTools';
 import App from '../App';
 
@@ -64,13 +66,19 @@ describe('DevDesk Developer Utilities Suite', () => {
 
     // Repeated parameters & percent/+ encoded values with fragment
     const complexParams = parseQueryParams(
-      'https://example.com/search?tag=alpha&tag=beta&q=rust+wasm&filter=a%26b%3Dc#results'
+      'https://example.com/search?tag=alpha&tag=beta&q=rust+wasm&filter=a%26b%3Dc#results?ignored=1'
     );
     expect(complexParams).toEqual([
       { key: 'tag', value: 'alpha' },
       { key: 'tag', value: 'beta' },
       { key: 'q', value: 'rust wasm' },
       { key: 'filter', value: 'a&b=c' },
+    ]);
+
+    // Raw query string with empty parameter value and trailing fragment
+    expect(parseQueryParams('?empty=&key=val#anchor')).toEqual([
+      { key: 'empty', value: '' },
+      { key: 'key', value: 'val' },
     ]);
   });
 
@@ -112,6 +120,26 @@ describe('DevDesk Developer Utilities Suite', () => {
     expect(diff.added).toBe(2);
     expect(diff.truncated).toBe(false);
     expect(diff.limitWarning).toBeUndefined();
+
+    // Exact boundary tests for MAX_DIFF_LINES (1500) and MAX_DIFF_CHARS (150,000)
+    const exactLimitLines = Array.from({ length: MAX_DIFF_LINES }, (_, i) => `row-${i}`).join('\n');
+    const exactDiff = computeLineDiff(exactLimitLines, exactLimitLines);
+    expect(exactDiff.truncated).toBe(false);
+    expect(exactDiff.limitWarning).toBeUndefined();
+    expect(exactDiff.unchanged).toBe(MAX_DIFF_LINES);
+
+    const oneOverLimitLines = Array.from({ length: MAX_DIFF_LINES + 1 }, (_, i) => `row-${i}`).join('\n');
+    const overLineDiff = computeLineDiff(oneOverLimitLines, exactLimitLines);
+    expect(overLineDiff.truncated).toBe(true);
+    expect(overLineDiff.limitWarning).toMatch(/1,500 lines/i);
+
+    const exactChars = 'a'.repeat(MAX_DIFF_CHARS);
+    expect(computeLineDiff(exactChars, exactChars).truncated).toBe(false);
+
+    const oneOverChars = 'a'.repeat(MAX_DIFF_CHARS + 1);
+    const overCharDiff = computeLineDiff(oneOverChars, exactChars);
+    expect(overCharDiff.truncated).toBe(true);
+    expect(overCharDiff.limitWarning).toMatch(/150 KB/i);
 
     // Pathological line count (> 1500 lines) is safely bounded and surfaces a clear warning
     const hugeOld = Array.from({ length: 2200 }, (_, i) => `line-${i}`).join('\n');
